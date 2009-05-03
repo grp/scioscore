@@ -2,7 +2,7 @@
 scioscore is (c) 2009 icefire.
 
 PatchMii is (c) 2008 bushing et al.
-Content Map code is by booto, modified by icefire.
+Identify code by tona, modified by icefire.
 +-------------------------------------------------------------------*/
 #include <stdio.h>
 #include <stdlib.h>
@@ -16,12 +16,50 @@ Content Map code is by booto, modified by icefire.
 #include <fat.h>
 #include <stdarg.h>
 
-#include "wiibasics.h"
 #include "patchmii_core.h"
-#include "id.h"
 #include "scios.h"
+#include "certs_dat.h"
 
 #define DEBUG
+
+static void *xfb = NULL;
+static GXRModeObj *rmode = NULL;
+
+s32 Identify_SU(void) 
+{
+	static u8 su_tmd[0x208] ATTRIBUTE_ALIGN(32);
+	static u8 su_tik[STD_SIGNED_TIK_SIZE] ATTRIBUTE_ALIGN(32);
+	signed_blob * s_tmd, * s_tik;
+	tmd * p_tmd;
+	tik * p_tik;
+	u32 keyid = 0;
+	
+	memset(su_tmd, 0, sizeof su_tmd);
+	memset(su_tik, 0, sizeof su_tik);
+	s_tmd = (signed_blob *) &su_tmd[0];
+	s_tik = (signed_blob *) &su_tik[0];
+	*s_tmd = *s_tik = 0x10001;
+	p_tmd = (tmd *) SIGNATURE_PAYLOAD(s_tmd);
+	p_tik = (tik *) SIGNATURE_PAYLOAD(s_tik);
+	
+	strcpy(p_tmd->issuer, "Root-CA00000001-CP00000004");
+	p_tmd->title_id = 0x0000000100000002ULL; //TITLE_ID(1,2);
+	
+	p_tmd->num_contents = 1;
+	
+	forge_tmd(s_tmd);
+	
+	strcpy(p_tik->issuer, "Root-CA00000001-XS00000003");
+	p_tik->ticketid = 0x000038A45236EE5FLL;
+	p_tik->titleid = 0x0000000100000002ULL; //TITLE_ID(1,2);
+	
+	memset(p_tik->cidx_mask, 0xFF, 0x20);
+	forge_tik(s_tik);
+	
+	return ES_Identify((signed_blob *) certs_dat, certs_dat_size, (signed_blob * ) su_tmd, sizeof(su_tmd), (signed_blob *) su_tik, sizeof(su_tik), &keyid);
+}
+
+
 
 void debug_sd(const char * file, u8 * buf, u32 len)
 {
@@ -101,7 +139,9 @@ void debug_wait()
 {
 	#ifdef DEBUG
 		printf("(Debug) Press any button to continue.\n");
-		wait_anyKey();
+		WPAD_ScanPads();
+		while(WPAD_ButtonsDown(0) == 0)
+			VIDEO_WaitVSync();
 	#endif
 }
 
@@ -279,11 +319,24 @@ int main(int argc, char **argv)
 	s32 ret = 0;
 	u32 i;
 	sciosError err;
-		
-	//ret = IOS_ReloadIOS(5);
-	ret = IOS_ReloadIOS(249);
 	
-	basicInit();
+	ret = IOS_ReloadIOS(249); //load cios
+	
+	VIDEO_Init();
+	rmode = VIDEO_GetPreferredMode(NULL);
+	GX_AdjustForOverscan(rmode, rmode, 32, 24);
+	xfb = MEM_K0_TO_K1(SYS_AllocateFramebuffer(rmode));
+	console_init(xfb,20,20,rmode->fbWidth,rmode->xfbHeight,rmode->fbWidth*VI_DISPLAY_PIX_SZ);
+	VIDEO_Configure(rmode);
+	VIDEO_SetNextFramebuffer(xfb);
+	VIDEO_SetBlack(FALSE);
+	VIDEO_Flush();
+	VIDEO_WaitVSync();
+	if(rmode->viTVMode&VI_NON_INTERLACE)
+		VIDEO_WaitVSync();
+	
+	printf("\x1b[2;0H");
+
 	WPAD_Init();
 	Identify_SU();
 	ISFS_Initialize();
@@ -294,7 +347,9 @@ int main(int argc, char **argv)
 		printf("Please install IOS249 first!\n");
 		
 		printf("\nPress any key to quit.\n");
-      	wait_anyKey();
+      	WPAD_ScanPads();
+		while(WPAD_ButtonsDown(0) == 0)
+			VIDEO_WaitVSync();
       	return 0;
 	}
 	
@@ -349,7 +404,9 @@ int main(int argc, char **argv)
    	 		{
       	 		printf("(*) PatchMii error: IOS %d install failed! Support info: %d.\n", i, ret);
       	 		printf("\nPress any key to quit.\n");
-      			wait_anyKey();
+      			WPAD_ScanPads();
+				while(WPAD_ButtonsDown(0) == 0)
+					VIDEO_WaitVSync();
       			return 0;
     		}
 
@@ -358,9 +415,11 @@ int main(int argc, char **argv)
     		if(err.code != SCIOS_OK)
     		{
     			printErrorCode(err);
-    			
       	 		printf("\nPress any key to quit.\n");
-      	 		wait_anyKey();
+      	 		
+      	 		WPAD_ScanPads();
+				while(WPAD_ButtonsDown(0) == 0)
+					VIDEO_WaitVSync();
       			return 0;
     		}
     		printf("..done!\n");
@@ -368,7 +427,9 @@ int main(int argc, char **argv)
     }
 
     printf("\n\n(*) Installation Succeeded! Press any key to exit.\n\n");
-    wait_anyKey();
+    WPAD_ScanPads();
+	while(WPAD_ButtonsDown(0) == 0)
+		VIDEO_WaitVSync();
     printf("Visit us at http://softmii.org/!");
     
     ISFS_Deinitialize();
