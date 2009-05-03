@@ -97,8 +97,10 @@ void printErrorCode(sciosError err)
 
 void debug_wait()
 {
-	//printf("(Debug) Press any button to continue.\n");
-	//wait_anyKey();
+	#ifdef DEBUG
+		printf("(Debug) Press any button to continue.\n");
+		wait_anyKey();
+	#endif
 }
 
 
@@ -218,7 +220,6 @@ sciosError patchIOS(u32 ios)
 					if(ret < 0)
 					return errorCreate(SCIOS_FAIL, ret, 0x15F5A774); //ISFSATTR
 					
-				newtmdcontent->cid = 0x1CEF14E5;
 				newtmdcontent->type = 0x0001;
 				
 				sdprintf("file attributes (owner = %d, group = %d, attributes = %d, ownerpermissions = %d, grouppermissions = %d, otherpermissions = %d)\n", owner, group, attributes, ownerperm, groupperm, otherperm);
@@ -236,7 +237,7 @@ sciosError patchIOS(u32 ios)
 			//debug_sd("fat1:/title.tmd", (u8 *) newtmd, SIGNED_TMD_SIZE(newtmd));
 			//debug_sd("fat1:/dipmodule.dat", data, sz);
 			
-			/*newdipfile = ISFS_Open(filename, ISFS_OPEN_RW); //open file for writing
+			newdipfile = ISFS_Open(filename, ISFS_OPEN_RW); //open file for writing
 				if(newdipfile < 0)
 				return errorCreate(SCIOS_ISFS_OPEN, 1, newdipfile);
 			ret = ISFS_Seek(newdipfile, 0, SEEK_SET);
@@ -257,7 +258,7 @@ sciosError patchIOS(u32 ios)
 			ret = ISFS_Write(newtmdisfs, newtmd, SIGNED_TMD_SIZE(newtmd));
 				if(ret < 0)
 				return errorCreate(SCIOS_ISFS_WRITE, 2, newtmdisfs);
-			ISFS_Close(newtmdisfs);*/
+			ISFS_Close(newtmdisfs);
 			
 			break;
 		}
