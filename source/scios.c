@@ -90,7 +90,7 @@ void printErrorCode(sciosError err)
 		case SCIOS_NO_MEMORY:
 			sdprintf("Memory Allocation Failed.\n");
 			break;
-	}
+	} 
 	return;	
 }
 
