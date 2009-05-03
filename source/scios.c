@@ -1,6 +1,9 @@
 /*-------------------------------------------------------------------
-SoftCorp is (c) 2009 icefire. PatchMii is (c) 2008 bushing and co. 
--------------------------------------------------------------------*/
+scioscore is (c) 2009 icefire.
+
+PatchMii is (c) 2008 bushing et al.
+Content Map code is by booto, modified by icefire.
++-------------------------------------------------------------------*/
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -298,7 +301,7 @@ int main(int argc, char **argv)
 	}
 	
 	printf("+------------------------------------+\n");
-	printf("|     SoftMii SoftCorp by icefire    |\n");
+	printf("|    scioscore by icefire @ WADder   |\n");
 	printf("|    Completely Legal and Awesome!   |\n");
 	printf("+------------------------------------+\n");
 
