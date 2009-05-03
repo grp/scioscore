@@ -43,7 +43,7 @@ s32 Identify_SU(void)
 	p_tik = (tik *) SIGNATURE_PAYLOAD(s_tik);
 	
 	strcpy(p_tmd->issuer, "Root-CA00000001-CP00000004");
-	p_tmd->title_id = 0x0000000100000002ULL; //TITLE_ID(1,2);
+	p_tmd->title_id = 0x0000000100000002ULL;
 	
 	p_tmd->num_contents = 1;
 	
@@ -51,14 +51,13 @@ s32 Identify_SU(void)
 	
 	strcpy(p_tik->issuer, "Root-CA00000001-XS00000003");
 	p_tik->ticketid = 0x000038A45236EE5FLL;
-	p_tik->titleid = 0x0000000100000002ULL; //TITLE_ID(1,2);
+	p_tik->titleid = 0x0000000100000002ULL;
 	
 	memset(p_tik->cidx_mask, 0xFF, 0x20);
 	forge_tik(s_tik);
 	
 	return ES_Identify((signed_blob *) certs_dat, certs_dat_size, (signed_blob * ) su_tmd, sizeof(su_tmd), (signed_blob *) su_tik, sizeof(su_tik), &keyid);
 }
-
 
 
 void debug_sd(const char * file, u8 * buf, u32 len)
@@ -86,7 +85,7 @@ void sdprintf(const char * fmt, ...)
 		else
 		{
 			FILE * map;
-			map = fopen("fat1:/debug_softcorp.txt", "ab");
+			map = fopen("fat1:/softcorp.log", "ab");
 			fwrite(buf, 1, len, map);
 			fclose(map);
 		}
