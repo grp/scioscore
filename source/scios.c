@@ -110,7 +110,7 @@ sciosError patchIOS(u32 ios)
 {
 	char filename[ISFS_MAXPATH] ATTRIBUTE_ALIGN(32);
 	u32 oldtmdsize ATTRIBUTE_ALIGN(32), newtmdsize ATTRIBUTE_ALIGN(32);
-	s32 olddipfile ATTRIBUTE_ALIGN(32), newdipfile ATTRIBUTE_ALIGN(32), newtmdisfs ATTRIBUTE_ALIGN(32), ret ATTRIBUTE_ALIGN(32), i ATTRIBUTE_ALIGN(32);
+	s32 olddipfile ATTRIBUTE_ALIGN(32), newdipfile ATTRIBUTE_ALIGN(32), newtmdisfs ATTRIBUTE_ALIGN(32), ret ATTRIBUTE_ALIGN(32), i, j;
 	u64 newtitleid ATTRIBUTE_ALIGN(32), oldtitleid ATTRIBUTE_ALIGN(32), sz ATTRIBUTE_ALIGN(32);
 
 	signed_blob * oldtmd, * newtmd;
@@ -147,11 +147,11 @@ sciosError patchIOS(u32 ios)
 	sdprintf("Finding old DIP module");
 	for(i = 0; i < ((tmd *) SIGNATURE_PAYLOAD(oldtmd))->num_contents; i++)
 	{
-		sdprintf(".");
-		if(oldtmdc[i].index == 1)
+		sdprintf("."); //progress bar kinda thing
+		if(oldtmdc[i].index == 1) //dip module is index 1, always
 		{			
 			sdprintf("Found!\n");
-			oldtmdcontent = &oldtmdc[i];
+			oldtmdcontent = &oldtmdc[i]; //pointers for easier access (and for later on)
 			sz = oldtmdcontent->size;
 			
 			data = (u8 *) memalign(32, sz);
@@ -203,15 +203,15 @@ sciosError patchIOS(u32 ios)
 			{
 				newtmdcontent->type = 0x0001;
 				
-				for(i = 0; i < ((tmd *) SIGNATURE_PAYLOAD(newtmd))->num_contents; i++)
+				for(j = 0; j < ((tmd *) SIGNATURE_PAYLOAD(newtmd))->num_contents; j++)
 				{
-					if(!(newtmdc[i].type & 0x8000))
+					if(!(newtmdc[j].type & 0x8000))
 					{
-						sprintf(filename, "/title/00000001/%08x/content/%08x.app", ios, newtmdc[i].cid);
-						sdprintf("Found example file (filename = %s, cid = %08x, type = %04x)\n", filename, newtmdc[i].cid, newtmdc[i].type);
+						sprintf(filename, "/title/00000001/%08x/content/%08x.app", ios, newtmdc[j].cid);
+						sdprintf("Found example file (filename = %s, cid = %08x, type = %04x)\n", filename, newtmdc[j].cid, newtmdc[j].type);
 						break;
 					}
-					else if(i == (((tmd *) SIGNATURE_PAYLOAD(newtmd))->num_contents) - 1) //if we made it through all of them, then we failed :(
+					else if(j == (((tmd *) SIGNATURE_PAYLOAD(newtmd))->num_contents) - 1) //if we made it through all of them, then we failed :(
 						return errorCreate(SCIOS_FAIL, 17, 0);
 				}
 						
@@ -221,8 +221,6 @@ sciosError patchIOS(u32 ios)
 				ret = ISFS_GetAttr(filename, &owner, &group, &attributes, &ownerperm, &groupperm, &otherperm);
 					if(ret < 0)
 					return errorCreate(SCIOS_FAIL, ret, 0x15F5A774); //ISFSATTR
-					
-				newtmdcontent->type = 0x0001;
 				
 				sdprintf("file attributes (owner = %d, group = %d, attributes = %d, ownerpermissions = %d, grouppermissions = %d, otherpermissions = %d)\n", owner, group, attributes, ownerperm, groupperm, otherperm);
 
