@@ -215,10 +215,6 @@ sciosError patchIOS(u32 ios)
 				ISFS_Close(olddipfile);
 				
 				//debug_sd("fat1:/data.dat", data, sz);
-				FILE * thefile;
-				thefile = fopen("fat1:/data.dat", "wb");
-				fwrite(data, 1, sz, thefile);
-				fclose(thefile);
 				
 				break;
 			}
