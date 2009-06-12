@@ -18,57 +18,13 @@ Identify code by tona, modified by icefire.
 
 #include "patchmii_core.h"
 #include "scios.h"
+#include "sha1.h"
 #include "certs_dat.h"
 
 #define DEBUG
 
 static void *xfb = NULL;
 static GXRModeObj *rmode = NULL;
-
-s32 Identify_SU(void) 
-{
-	static u8 su_tmd[0x208] ATTRIBUTE_ALIGN(32);
-	static u8 su_tik[STD_SIGNED_TIK_SIZE] ATTRIBUTE_ALIGN(32);
-	signed_blob * s_tmd, * s_tik;
-	tmd * p_tmd;
-	tik * p_tik;
-	u32 keyid = 0;
-	
-	memset(su_tmd, 0, sizeof su_tmd);
-	memset(su_tik, 0, sizeof su_tik);
-	s_tmd = (signed_blob *) &su_tmd[0];
-	s_tik = (signed_blob *) &su_tik[0];
-	*s_tmd = *s_tik = 0x10001;
-	p_tmd = (tmd *) SIGNATURE_PAYLOAD(s_tmd);
-	p_tik = (tik *) SIGNATURE_PAYLOAD(s_tik);
-	
-	strcpy(p_tmd->issuer, "Root-CA00000001-CP00000004");
-	p_tmd->title_id = 0x0000000100000002ULL;
-	
-	p_tmd->num_contents = 1;
-	
-	forge_tmd(s_tmd);
-	
-	strcpy(p_tik->issuer, "Root-CA00000001-XS00000003");
-	p_tik->ticketid = 0x000038A45236EE5FLL;
-	p_tik->titleid = 0x0000000100000002ULL;
-	
-	memset(p_tik->cidx_mask, 0xFF, 0x20);
-	forge_tik(s_tik);
-	
-	return ES_Identify((signed_blob *) certs_dat, certs_dat_size, (signed_blob * ) su_tmd, sizeof(su_tmd), (signed_blob *) su_tik, sizeof(su_tik), &keyid);
-}
-
-
-void debug_sd(const char * file, u8 * buf, u32 len)
-{
-	#ifdef DEBUG
-		FILE * map;
-		map = fopen(file, "wb");
-		fwrite(buf, 1, len, map);
-		fclose(map);
-	#endif
-}
 
 void sdprintf(const char * fmt, ...) 
 {
@@ -84,238 +40,292 @@ void sdprintf(const char * fmt, ...)
 			printf("Error: len = %d\n", len);
 		else
 		{
-			FILE * map;
-			map = fopen("fat1:/softcorp.log", "ab");
-			fwrite(buf, 1, len, map);
+			sprintf(buf, "%s\n", buf);
+			FILE * map = fopen("sd:/scioscore.log", "ab");
+			fprintf(map, "%s", buf);
 			fclose(map);
+			printf("%s", buf);
 		}
 	#endif
 }
 
 
-sciosError errorCreate(u32 code, s32 what, s32 data)
-{
-	sciosError ret;
-	ret.code = code;
-	ret.what = what;
-	ret.data = data;
-	return ret;	
-}
-
-void printErrorCode(sciosError err)
-{
-	switch(err.code)
-	{
-		case SCIOS_FAIL:
-			sdprintf("Failure! Code 1: %x, Code 2: %X\n", err.what, err.data);
-			break;
-		case SCIOS_TMD_OPEN:
-			sdprintf("TMD %d Opening Failed.\n", err.what);
-			break;
-		case SCIOS_TMD_READ:
-			sdprintf("TMD %d Reading Failed.\n", err.what);
-			break;
-		case SCIOS_ISFS_OPEN:
-			sdprintf("ISFS Opening Failed. File: %d, Return: %d\n", err.what, err.data);
-			break;
-		case SCIOS_ISFS_READ:
-			sdprintf("ISFS Reading Failed. File: %d, Return: %d\n", err.what, err.data);
-			break;
-		case SCIOS_ISFS_WRITE:
-			sdprintf("ISFS Writing Failed. File: %d, Return: %d\n", err.what, err.data);
-			break;
-		case SCIOS_DIP_FIND:
-			sdprintf("DIP %d Finding Failed.\n", err.what);
-			break;
-		case SCIOS_NO_MEMORY:
-			sdprintf("Memory Allocation Failed.\n");
-			break;
-	} 
-	return;	
-}
-
-void debug_wait()
+void wait()
 {
 	#ifdef DEBUG
 		printf("(Debug) Press any button to continue.\n");
 		WPAD_ScanPads();
 		while(WPAD_ButtonsDown(0) == 0)
-			VIDEO_WaitVSync();
+			WPAD_ScanPads();
 	#endif
 }
 
-
-sciosError patchIOS(u32 ios)
+s32 getDIP()
 {
-	char filename[ISFS_MAXPATH] ATTRIBUTE_ALIGN(32);
-	u32 oldtmdsize ATTRIBUTE_ALIGN(32), newtmdsize ATTRIBUTE_ALIGN(32);
-	s32 olddipfile ATTRIBUTE_ALIGN(32), newdipfile ATTRIBUTE_ALIGN(32), newtmdisfs ATTRIBUTE_ALIGN(32), ret ATTRIBUTE_ALIGN(32), i, j;
-	u64 newtitleid ATTRIBUTE_ALIGN(32), oldtitleid ATTRIBUTE_ALIGN(32), sz ATTRIBUTE_ALIGN(32);
+	char filename[ISFS_MAXPATH];
+	u32 tmdsize, sz;
+	s32 ret, i, fd;
 
-	signed_blob * oldtmd, * newtmd;
-	tmd_content * oldtmdc, * newtmdc, * oldtmdcontent = NULL, * newtmdcontent = NULL;
+	signed_blob * stmd;
+	tmd_content * tmdc;
 	u8 * data = NULL;
 	
-	newdipfile = newtmdisfs = sz = 0;
+	ES_GetStoredTMDSize(0x00000001000000f9LL, &tmdsize);
+	stmd = (signed_blob *) memalign(32, tmdsize);
+	//if(stmd == NULL)
+	//	return -1;
+	memset(stmd, 0, tmdsize);
+	ES_GetStoredTMD(0x00000001000000f9LL, stmd, tmdsize);
+	tmdc = TMD_CONTENTS((tmd *) SIGNATURE_PAYLOAD(stmd));
 	
-	sdprintf("(*) Installing DIP Module to IOS %d\n", ios);
-	
-	if(ios == 2)
-		return errorCreate(SCIOS_FAIL, 0, 0);
-	
-	newtitleid = 0x0000000100000000LL + ios; //Add the IOS's value to the base IOS title id.
-	oldtitleid = 0x00000001000000f9LL;
-	
-	ES_GetStoredTMDSize(oldtitleid, &oldtmdsize);
-	oldtmd = (signed_blob *) memalign(32, oldtmdsize);
-	if(oldtmd == NULL)
-		return errorCreate(SCIOS_NO_MEMORY, 0, 0);
-	memset(oldtmd, 0, oldtmdsize);
-	ES_GetStoredTMD(oldtitleid, oldtmd, oldtmdsize);
-	oldtmdc = TMD_CONTENTS((tmd *) SIGNATURE_PAYLOAD(oldtmd));
-	
-	ES_GetStoredTMDSize(newtitleid, &newtmdsize);
-	newtmd = (signed_blob *) memalign(32, newtmdsize);
-	if(newtmd == NULL)
-		return errorCreate(SCIOS_NO_MEMORY, 0, 0);
-	memset(newtmd, 0, newtmdsize);
-	ES_GetStoredTMD(newtitleid, newtmd, newtmdsize);
-	newtmdc = TMD_CONTENTS((tmd *) SIGNATURE_PAYLOAD(newtmd));
-	
-	
-	sdprintf("Finding old DIP module");
-	for(i = 0; i < ((tmd *) SIGNATURE_PAYLOAD(oldtmd))->num_contents; i++)
+	for(i = 0; i < ((tmd *) SIGNATURE_PAYLOAD(stmd))->num_contents; i++)
 	{
-		sdprintf("."); //progress bar kinda thing
-		if(oldtmdc[i].index == 1) //dip module is index 1, always
+		if(tmdc[i].index == 1) //dip module is index 1, always
 		{			
-			sdprintf("Found!\n");
-			oldtmdcontent = &oldtmdc[i]; //pointers for easier access (and for later on)
-			sz = oldtmdcontent->size;
+			sz = tmdc[i].size;
 			
 			data = (u8 *) memalign(32, sz);
-				if(data == NULL)
-				return errorCreate(SCIOS_NO_MEMORY, 0, 0);
+			//if(data == NULL)
+			//	return -1;
 			
-			if(!(oldtmdcontent->type & 0x8000)) //make sure its not a shared content
+			if(!(tmdc[i].type & 0x8000)) //make sure its not a shared content
 			{
-				sprintf(filename, "/title/00000001/000000f9/content/%08x.app", oldtmdcontent->cid); //generate filepath
-					sdprintf("Read Filename: %s\n", filename);
-					sdprintf("File Size: %d\n", sz);
-					
-				olddipfile = ISFS_Open(filename, ISFS_OPEN_RW);
-					if(olddipfile < 0)
-					return errorCreate(SCIOS_ISFS_OPEN, 0, olddipfile);
-				ret = ISFS_Seek(olddipfile, 0, SEEK_SET);
-					if(ret < 0)
-					return errorCreate(SCIOS_ISFS_OPEN, 4363, olddipfile);
-				ret = ISFS_Read(olddipfile, data, sz);
-					if(ret < 0)
-					return errorCreate(SCIOS_ISFS_READ, 0, olddipfile);
-				ISFS_Close(olddipfile);
+				sprintf(filename, "/title/00000001/000000f9/content/%08x.app", tmdc[i].cid); //generate filepath
+				sdprintf("DIP filename: %s", filename);
 				
-				//debug_sd("fat1:/data.dat", data, sz);
+				fd = ISFS_Open(filename, ISFS_OPEN_RW);
+				//if(fd < 0)
+				//	return -1;
+				ret = ISFS_Seek(fd, 0, SEEK_SET);
+				//if(ret < 0)
+				//	return -1;
+				ret = ISFS_Read(fd, data, sz);
+				//if(ret < 0)
+				//	return -1;
+				ISFS_Close(fd);
 				
-				break;
+				FILE * fat = fopen("sd:/dip.bin", "wb");
+				fwrite(data, 1, sz, fat);
+				fclose(fat);
+				
+				sdprintf("DIP Module extracted");
+				
+				return 0;
 			}
 			else
-				return errorCreate(SCIOS_FAIL, 0, 0);	
+				return -1;
 		}
-		else if(i == (((tmd *) SIGNATURE_PAYLOAD(oldtmd))->num_contents) - 1) //if we made it through all of them, then we failed :(
-			return errorCreate(SCIOS_DIP_FIND, 1, 0);
+		else if(i == (((tmd *) SIGNATURE_PAYLOAD(stmd))->num_contents) - 1) //if we made it through all of them, then we failed :(
+			return -1;
 	}
-	
-	sdprintf("Finding new DIP module");
-	for(i = 0; i < ((tmd *) SIGNATURE_PAYLOAD(newtmd))->num_contents; i++)
-	{
-		sdprintf(".");
-		if(newtmdc[i].index == 1)
-		{
-			sdprintf("Found!\n");
-			newtmdcontent = &newtmdc[i];
-			
-			if(newtmdcontent->type & 0x8000) //Shared content! Unshardify it
-			{
-				newtmdcontent->type = 0x0001;
-				
-				for(j = 0; j < ((tmd *) SIGNATURE_PAYLOAD(newtmd))->num_contents; j++)
-				{
-					if(!(newtmdc[j].type & 0x8000))
-					{
-						sprintf(filename, "/title/00000001/%08x/content/%08x.app", ios, newtmdc[j].cid);
-						sdprintf("Found example file (filename = %s, cid = %08x, type = %04x)\n", filename, newtmdc[j].cid, newtmdc[j].type);
-						break;
-					}
-					else if(j == (((tmd *) SIGNATURE_PAYLOAD(newtmd))->num_contents) - 1) //if we made it through all of them, then we failed :(
-						return errorCreate(SCIOS_FAIL, 17, 0);
-				}
-						
-				u8 attributes, ownerperm, groupperm, otherperm;
-				u32 owner;
-				u16 group;
-				ret = ISFS_GetAttr(filename, &owner, &group, &attributes, &ownerperm, &groupperm, &otherperm);
-					if(ret < 0)
-					return errorCreate(SCIOS_FAIL, ret, 0x15F5A774); //ISFSATTR
-				
-				sdprintf("file attributes (owner = %d, group = %d, attributes = %d, ownerpermissions = %d, grouppermissions = %d, otherpermissions = %d)\n", owner, group, attributes, ownerperm, groupperm, otherperm);
+	return -1; //we only get here if we fail.
+}
 
-				sprintf(filename, "/title/00000001/%08x/content/%08x.app", ios, newtmdcontent->cid); //generate filepath
-				ret = ISFS_CreateFile(filename, attributes, ownerperm, groupperm, otherperm);
-					if(ret < 0)
-					return errorCreate(SCIOS_FAIL, ret, 0x15F5C47E); //ISFSCREATE
+
+s32 install_cIOSCORP()
+{
+	static u64 * titles;
+	s32 ret, i, j, cnt;
+	u32 num_titles, ios_cnt = 0;
+	u32 * ios;
+	
+	getDIP();
+	
+	ret = ES_GetNumTitles(&num_titles);
+	//if(ret < 0)
+	//	return -1;
+	titles = memalign(32, num_titles * sizeof(u64));
+	ret = ES_GetTitles(titles, num_titles);
+	//if(ret < 0)
+	//	return ret;
+		
+	sdprintf("Number of titles intalled is: %u", num_titles);
+	
+	
+	for (i = 0; i < num_titles; i++) 
+	{
+		u32 upper;
+		upper = titles[i] >> 32;
+		if(upper == 0x00000001)
+			ios_cnt++;
+	}	
+	ios = memalign(32, ios_cnt * sizeof(u32));
+	
+	for (i = 0, j = 0; j < ios_cnt && i < num_titles; i++)
+	{
+		u32 upper, lower;
+		upper = titles[i] >> 32;
+		lower = titles[i] & 0xFFFFFFFF;
+		if(upper == 0x00000001)
+		{
+			ios[j] = lower;
+			j++;
+		}
+	}
+	free(titles);
+	
+	sdprintf("Installed IOS count: %u", ios_cnt);
+	
+	sdprintf("Loading certs from NAND...");
+	s32 ifd = ISFS_Open("/sys/cert.sys", ISFS_OPEN_READ);
+	u32 cert_len = 0x0A00;
+	signed_blob * certs = memalign(32, cert_len);
+	ISFS_Read(ifd, certs, cert_len);
+	ISFS_Close(ifd);
+	sdprintf("Loaded certificate chain!");
+	
+	for(cnt = 0; cnt < ios_cnt; cnt++) //patch all the ios's
+	{
+		u32 cur_ios = ios[cnt];
+		if(cur_ios == 249 || cur_ios == 254 || cur_ios == 4 || cur_ios == 3 || cur_ios == 0)
+			continue;
+			
+		if(cur_ios != 28)
+		{
+			sdprintf("Skipping IOS %u...", cur_ios);
+			continue;
+		}
+			
+		if(cur_ios < 30)
+			patchmii_install(1, 30, 1040, 1, cur_ios, 0, false);
+		u32 tmdsize;
+		u64 titleid;
+		
+		sdprintf("\nCurrent IOS: %u", cur_ios);
+		
+		
+		signed_blob * stmd;
+		tmd_content * tmdc;
+		tmd * ptmd;
+
+		titleid = 0x0000000100000000ULL | cur_ios; //make a full title id
+	
+		ES_GetStoredTMDSize(titleid, &tmdsize);
+		stmd = (signed_blob *) memalign(32, tmdsize);
+		//if(stmd == NULL)
+		//	return -1;
+		memset(stmd, 0, tmdsize);
+		ES_GetStoredTMD(titleid, stmd, tmdsize);
+		ptmd = SIGNATURE_PAYLOAD(stmd);
+		tmdc = TMD_CONTENTS(ptmd);
+		
+		sdprintf("TMD Retrieved! Size: %u, number of contents: %u", tmdsize, ptmd->num_contents);
+	
+		u8 * buf = NULL;
+		u32 fsz = 0;
+		for(i = 0; i < ptmd->num_contents; i++)
+		{
+			char * fname = malloc(256);
+			sprintf(fname, "sd:/%08x", i);
+			sdprintf("SD Filename for content index %u out of %u: %s", i, ptmd->num_contents, fname);
+			
+			if(tmdc[i].index == 1) //dip module
+			{
+				sdprintf("DIP module copying...");
+				FILE * src = fopen("sd:/dip.bin", "rb");
+				fseek(src, 0, SEEK_END);
+				fsz = ftell(src);
+				fseek(src, 0, SEEK_SET);
+				sdprintf("filesize: %u", fsz);
+				buf = malloc(fsz);
+				fread(buf, 1, fsz, src);
+				fclose(src);
+				
+				FILE * dst = fopen(fname, "wb");
+				fwrite(buf, 1, fsz, dst);
+				fclose(dst);
+				
+				sdprintf("DIP module copied");
+				
+				sha1 hash;
+				SHA1(buf, fsz, hash);
+				memcpy(tmdc[i].hash, hash, 20);
+				free(buf);
+				sdprintf("Updated hash!");
+				
+				tmdc[i].size = fsz;
+			}
+			else
+			{
+				sdprintf("Reading content from NAND...");
+				
+				s32 cfd;
+				u8 * data = memalign(32, tmdc[i].size);
+				cfd = ES_OpenTitleContent(titleid, i);
+				ES_ReadContent(cfd, data, tmdc[i].size);
+				ES_CloseContent(cfd);
+
+				FILE * dst = fopen(fname, "wb");
+				fwrite(data, tmdc[i].size, 1, dst);
+				fclose(dst);
+				sdprintf("Done writing content to SD.", i);
+				
+				sha1 hash;
+				SHA1(data, tmdc[i].size, hash);
+				memcpy(tmdc[i].hash, hash, 20);
+				free(data);
+				sdprintf("Updated hash!");
 			}
 			
-			sprintf(filename, "/title/00000001/%08x/content/%08x.app", ios, newtmdcontent->cid); //generate filepath
-				
-			sdprintf("Write Filename: %s\n", filename);
-			
-			//debug_sd("fat1:/title.tmd", (u8 *) newtmd, SIGNED_TMD_SIZE(newtmd));
-			//debug_sd("fat1:/dipmodule.dat", data, sz);
-			
-			newdipfile = ISFS_Open(filename, ISFS_OPEN_RW); //open file for writing
-				if(newdipfile < 0)
-				return errorCreate(SCIOS_ISFS_OPEN, 1, newdipfile);
-			ret = ISFS_Seek(newdipfile, 0, SEEK_SET);
-				if(newdipfile < 0)
-				return errorCreate(SCIOS_ISFS_OPEN, 1, newdipfile);
-			ret = ISFS_Write(newdipfile, data, sz);
-				if(ret < 0)
-				return errorCreate(SCIOS_ISFS_WRITE, 1, newdipfile);
-			ISFS_Close(newdipfile);
-			
-			sprintf(filename, "/title/00000001/%08x/content/title.tmd", ios);
-			newtmdisfs = ISFS_Open(filename, ISFS_OPEN_RW);
-				if(newtmdisfs < 0)
-				return errorCreate(SCIOS_ISFS_OPEN, 2, newtmdisfs);
-			ret = ISFS_Seek(newtmdisfs, 0, SEEK_SET);
-				if(newtmdisfs < 0)
-				return errorCreate(SCIOS_ISFS_OPEN, 2, newtmdisfs);
-			ret = ISFS_Write(newtmdisfs, newtmd, SIGNED_TMD_SIZE(newtmd));
-				if(ret < 0)
-				return errorCreate(SCIOS_ISFS_WRITE, 2, newtmdisfs);
-			ISFS_Close(newtmdisfs);
-			
-			break;
+			tmdc[i].cid = i; //REALLY FUCKING HACKY. WHY THE HELL ISNT THE CID THERE ANYWAY!? -- not working anyway
+							
+			sdprintf("Content read and written to SD (size: %u bytes, content id: %u)", tmdc[i].size, tmdc[i].cid);
+			free(fname);
 		}
-		else if(i == (((tmd *) SIGNATURE_PAYLOAD(newtmd))->num_contents) - 1)
-			return errorCreate(SCIOS_DIP_FIND, 2, 0);
+		
+		u16 i; //fakesign!
+		for(i = 0; i < 65535; i++) 
+		{
+			ptmd->fill3 = i;
+			sha1 hash;
+			SHA1((u8 *) ptmd, TMD_SIZE(ptmd), hash);
+			if(hash[0] == 0) 
+			{
+				printf("Fakesigned TMD!");
+				break;
+			}
+		}
+		
+
+		ret = ES_AddTitleStart(stmd, tmdsize, certs, cert_len, NULL, 0);
+		sdprintf("AddTitle returned %d", ret);
+		for(i = 0; i < ptmd->num_contents; i++)
+		{
+			sdprintf("Adding content: %u", i);
+			char * fname = malloc(256);
+			sprintf(fname, "sd:/%08x", i);
+			FILE * fp = fopen(fname, "rb");
+			free(fname);
+			u8 * cur_data;
+			s32 cfd;
+			
+			cur_data = memalign(32, tmdc[i].size);
+			fread(cur_data, 1, tmdc[i].size, fp);
+		
+			cfd = ES_AddContentStart(titleid, tmdc[i].cid);
+			sdprintf("cfd/return value from ES_AddContentStart() is %d", cfd);
+			ret = ES_AddContentData(cfd, cur_data, tmdc[i].size);
+			sdprintf("ES_AddContentData() returned %d", ret);
+			ES_AddContentFinish(cfd);
+			
+			sdprintf("Done adding content %d of %d", i, ptmd->num_contents);
+		
+			free(cur_data);
+			fclose(fp);
+			unlink(fname);
+		}
+		ES_AddTitleFinish();
+		free(stmd);
 	}
+	free(ios);
+	free(certs);
 	
-	ISFS_Close(newdipfile);
-	free(oldtmd);
-	free(newtmd);
-	free(data);
-	
-	return errorCreate(SCIOS_OK, 0, 0);
+	return 0;
 }
 
 int main(int argc, char **argv) 
 {
-	s32 ret = 0;
-	u32 i;
-	sciosError err;
-	
-	ret = IOS_ReloadIOS(249); //load cios
+	s32 ret = IOS_ReloadIOS(249); //load cios
 	
 	VIDEO_Init();
 	rmode = VIDEO_GetPreferredMode(NULL);
@@ -333,99 +343,34 @@ int main(int argc, char **argv)
 	printf("\x1b[2;0H");
 
 	WPAD_Init();
-	Identify_SU();
 	ISFS_Initialize();
 	fatInitDefault();
 
 	if(ret < 0)
 	{
-		printf("Please install IOS249 first!\n");
+		sdprintf("Please install IOS249 first!\n");
 		
-		printf("\nPress any key to quit.\n");
+		sdprintf("\nPress any key to quit.\n");
       	WPAD_ScanPads();
 		while(WPAD_ButtonsDown(0) == 0)
-			VIDEO_WaitVSync();
+			WPAD_ScanPads();
       	return 0;
 	}
 	
-	printf("+------------------------------------+\n");
-	printf("|    scioscore by icefire @ WADder   |\n");
-	printf("|    Completely Legal and Awesome!   |\n");
-	printf("+------------------------------------+\n");
+	sdprintf("+------------------------------------+\n");
+	sdprintf("|    scioscore by icefire @ WADder   |\n");
+	sdprintf("|    Completely Legal and Awesome!   |\n");
+	sdprintf("+------------------------------------+\n");
 
-	printf("\nAny usage outside of SoftMii installation and/or personal use is prohibited without permission from icefire and the SoftMii team.\nicefire and/or the SoftMii Team hold no responsibility for any potential damage that is incurred by using this software.\n\n");
+    sdprintf("(*) Installing...\n");
+	patchmii_network_init(); //Load PatchMii network stuff
+   
+    install_cIOSCORP(); 
+   
+	sdprintf("\n\n(*) Installation Succeeded! Press any key to exit.\n\n");
     
-    printf("(*) Installing SoftCorp...\n\n");
-    patchmii_network_init(); //Load PatchMii network stuff
-    
-    for(i = 0; i < 256; i++)
-    {
-    	//The next line tells whcih IOS's to install. uncomment any IOS's to isntall/patch
-    	if(/*i == 9 || i == 11 || i == 12 || i == 13 || i == 14 || i == 15 || i == 17 || i == 21 || i == 21 || i == 28 || i == 30 || i == 31 || i == 33 || i == 34 || i == 35 || i == 36 ||*/ i == 37/* || i == 38 || i == 41 || i == 43 || i == 45 || i == 46 || i == 50 || i == 51 || i == 52 || i == 53 || i == 55 || i == 60 || i == 61*/)
-    	{
-    		printf("\n\n(*) Installing IOS %d...\n", i);
-
-    		switch (i) //for mothballed IOS's
-    		{
-    			//there is no need to install ANY ios's higher than 30...
-    			//but this is kept because these IOS's will fail at getting the latest version
-    			/*
-    			case 30:
-    				//ret = patchmii_install(1, i, 1040, 1, i, 0, true);
-    				break;
-    			*/
-    			case 50:
-    				ret = patchmii_install(1, i, 4889, 1, i, 0, true);
-    				break;
-    			case 51:
-    				ret = patchmii_install(1, i, 4633, 1, i, 0, true);
-    				break;
-    			case 60: //potential future mothball
-    				ret = patchmii_install(1, i, 6174, 1, i, 0, true);
-    				break;
-    			case 61: //potential future mothball
-    				ret = patchmii_install(1, i, 4890, 1, i, 0, true);
-    				break;
-    			default:
-    			    if(i < 30)
-    					ret = patchmii_install(1, 30, 1040, 1, i, 0, false); //Install 1-30 (IOS30) as 1-i and don't patch trucha (already has it)
-    																		//we use IOS36 and this version so we CAN have ES_Identify()
-    				else
-    					ret = 1; //succeeded if we did nothing
-    				break;
-    		}
-    		
-   	 		if (ret < 0)
-   	 		{
-      	 		printf("(*) PatchMii error: IOS %d install failed! Support info: %d.\n", i, ret);
-      	 		printf("\nPress any key to quit.\n");
-      			WPAD_ScanPads();
-				while(WPAD_ButtonsDown(0) == 0)
-					VIDEO_WaitVSync();
-      			return 0;
-    		}
-
-			printf("Patching...");
-    		err = patchIOS(i); //Add the DIP module
-    		if(err.code != SCIOS_OK)
-    		{
-    			printErrorCode(err);
-      	 		printf("\nPress any key to quit.\n");
-      	 		
-      	 		WPAD_ScanPads();
-				while(WPAD_ButtonsDown(0) == 0)
-					VIDEO_WaitVSync();
-      			return 0;
-    		}
-    		printf("..done!\n");
-    	}
-    }
-
-    printf("\n\n(*) Installation Succeeded! Press any key to exit.\n\n");
-    WPAD_ScanPads();
 	while(WPAD_ButtonsDown(0) == 0)
-		VIDEO_WaitVSync();
-    printf("Visit us at http://softmii.org/!");
+		WPAD_ScanPads();
     
     ISFS_Deinitialize();
     
